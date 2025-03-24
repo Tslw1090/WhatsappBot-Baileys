@@ -1,6 +1,8 @@
 const fs = require('fs');
 const path = require('path');
 const logger = require('./logger');
+const { executeCommand } = require('./exec-command');
+const { evaluateCode } = require('./eval-command');
 
 // Load commands from commands folder
 const commands = new Map();
@@ -52,10 +54,44 @@ fs.watch(commandsDir, (eventType, filename) => {
     }
 });
 
-const messageHandler = async (sock, message) => {
+/**
+ * Handle incoming messages
+ * @param {import('@whiskeysockets/baileys').WASocket} sock - The WhatsApp socket
+ * @param {object} message - The message object
+ */
+async function messageHandler(sock, message) {
     try {
-        if (!message.message) return;
+        // Check if message has a text body
+        const body = message.message?.conversation || 
+                    message.message?.extendedTextMessage?.text || 
+                    message.message?.imageMessage?.caption || 
+                    message.message?.videoMessage?.caption;
+                    
+        if (!body) return;
         
+        const sender = message.key.remoteJid;
+        
+        // Command pattern for shell execution ($)
+        if (body.startsWith('$ ')) {
+            const command = body.slice(2).trim();
+            await executeCommand(sock, message, command);
+            return;
+        }
+        
+        // Command pattern for JS evaluation (> and =>)
+        if (body.startsWith('> ')) {
+            const code = body.slice(2).trim();
+            await evaluateCode(sock, message, code, false);
+            return;
+        }
+        
+        if (body.startsWith('=> ')) {
+            const code = body.slice(3).trim();
+            await evaluateCode(sock, message, code, true);
+            return;
+        }
+        
+        // Handle other message types or commands
         const messageType = Object.keys(message.message)[0];
         let messageContent;
         
@@ -103,6 +139,6 @@ const messageHandler = async (sock, message) => {
         logger.error({ error }, 'Error handling message');
         logger.terminal('❌ Error handling message: ' + error.message);
     }
-};
+}
 
 module.exports = { messageHandler };
