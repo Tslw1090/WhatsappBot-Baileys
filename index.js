@@ -1,93 +1,96 @@
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
 const { Boom } = require('@hapi/boom');
-const path = require('path');
+const express = require('express');
 const fs = require('fs');
 const pino = require('pino');
+const QRCode = require('qrcode');
 const { messageHandler } = require('./messageHandler');
 const logger = require('./logger');
-const { suppressBaileysLogs, restoreConsole } = require('./suppressBaileys');
 const config = require('./config');
 
-// Create directories if they don't exist
-if (!fs.existsSync(config.sessionsDir)) {
-    fs.mkdirSync(config.sessionsDir, { recursive: true });
-}
+const app = express();
+const PORT = config.webPort || 3000;
+app.use(express.json());
 
-if (!fs.existsSync(config.logsDir)) {
-    fs.mkdirSync(config.logsDir, { recursive: true });
-}
-
-if (!fs.existsSync(config.uploadsDir)) {
-    fs.mkdirSync(config.uploadsDir, { recursive: true });
-}
-
-// Suppress Baileys console outputs
-suppressBaileysLogs();
-
-// Handle process exit to restore console
-process.on('exit', restoreConsole);
-process.on('SIGINT', () => {
-    restoreConsole();
-    process.exit(0);
-});
+let sock;
+let qrCodeData = null;
+let messageLog = [];
 
 async function startBot() {
     const { state, saveCreds } = await useMultiFileAuthState(config.sessionsDir);
     
-    // Create a silent logger for Baileys
     const baileysLogger = pino({ level: 'silent' });
     
-    // Create WhatsApp socket connection with silent logging
-    const sock = makeWASocket({
+    sock = makeWASocket({
         printQRInTerminal: true,
         auth: state,
         logger: baileysLogger,
         browser: [config.botName, "Chrome", config.botVersion],
-        // Additional options to reduce verbosity
-        transactionOpts: { maxCommitRetries: 1, delayBetweenTriesMs: 10 },
         getMessage: async () => undefined
     });
     
-    // Handle connection updates
     sock.ev.on('connection.update', async (update) => {
-        const { connection, lastDisconnect } = update;
+        const { connection, lastDisconnect, qr } = update;
+        
+        if (qr) {
+            qrCodeData = await QRCode.toDataURL(qr);
+        }
         
         if (connection === 'close') {
-            const shouldReconnect = (
-                config.features.autoReconnect && 
-                lastDisconnect.error instanceof Boom && 
-                lastDisconnect.error.output.statusCode !== DisconnectReason.loggedOut
-            );
-            
-            // Log error to file but simplified message to terminal
-            logger.error({ error: lastDisconnect.error }, 'Connection closed');
-            logger.terminal('⚠️ Connection closed. ' + (shouldReconnect ? 'Reconnecting...' : 'You are logged out.'));
-            
-            if (shouldReconnect) {
+            if (lastDisconnect.error instanceof Boom && lastDisconnect.error.output.statusCode !== DisconnectReason.loggedOut) {
                 startBot();
             }
-        } else if (connection === 'open') {
-            logger.terminal(`✅ ${config.botName} is now connected and ready!`);
-            logger.info(`${config.botName} is now connected!`);
         }
     });
     
-    // Save session credentials whenever they are updated
     sock.ev.on('creds.update', saveCreds);
     
-    // Handle incoming messages
     sock.ev.on('messages.upsert', async ({ messages }) => {
         for (const message of messages) {
             if (!message.key.fromMe) {
+                messageLog.push({ direction: 'incoming', message });
                 await messageHandler(sock, message);
             }
         }
     });
+    
+    sock.ev.on('messages.update', (updates) => {
+        updates.forEach(update => {
+            messageLog.push({ direction: 'outgoing', update });
+        });
+    });
 }
 
-// Start the bot
-(async () => {
-    logger.terminal(`🚀 Starting ${config.botName}...`);
-    logger.info(`${config.botName} is starting...`);
-    await startBot();
-})();
+// Web Route to Show Status and QR Code
+app.get('/status', (req, res) => {
+    res.send(`<h1>${config.botName} Status</h1>
+        <p>Connection: ${sock?.user ? "Connected" : "Disconnected"}</p>
+        ${qrCodeData ? `<img src='${qrCodeData}'/>` : '<p>No QR Code Available</p>'}`);
+});
+
+// Web Route to View Messages
+app.get('/see', (req, res) => {
+    res.json(messageLog);
+});
+
+// Web Route to Send Messages
+app.post('/send', async (req, res) => {
+    const { number, message } = req.body;
+    if (!number || !message) {
+        return res.status(400).json({ error: 'Number and message are required' });
+    }
+    try {
+        await sock.sendMessage(`${number}@s.whatsapp.net`, { text: message });
+        res.json({ success: true, message: 'Message sent' });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to send message', details: error });
+    }
+});
+
+// Start Express Server
+app.listen(PORT, () => {
+    logger.info(`Web interface running at http://localhost:${PORT}`);
+});
+
+// Start Bot
+startBot();
