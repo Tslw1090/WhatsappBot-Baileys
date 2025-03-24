@@ -6,11 +6,19 @@ const pino = require('pino');
 const { messageHandler } = require('./messageHandler');
 const logger = require('./logger');
 const { suppressBaileysLogs, restoreConsole } = require('./suppressBaileys');
+const config = require('./config');
 
-// Path for storing session data
-const sessionsDir = path.join(__dirname, 'sessions');
-if (!fs.existsSync(sessionsDir)) {
-    fs.mkdirSync(sessionsDir, { recursive: true });
+// Create directories if they don't exist
+if (!fs.existsSync(config.sessionsDir)) {
+    fs.mkdirSync(config.sessionsDir, { recursive: true });
+}
+
+if (!fs.existsSync(config.logsDir)) {
+    fs.mkdirSync(config.logsDir, { recursive: true });
+}
+
+if (!fs.existsSync(config.uploadsDir)) {
+    fs.mkdirSync(config.uploadsDir, { recursive: true });
 }
 
 // Suppress Baileys console outputs
@@ -24,7 +32,7 @@ process.on('SIGINT', () => {
 });
 
 async function startBot() {
-    const { state, saveCreds } = await useMultiFileAuthState('sessions');
+    const { state, saveCreds } = await useMultiFileAuthState(config.sessionsDir);
     
     // Create a silent logger for Baileys
     const baileysLogger = pino({ level: 'silent' });
@@ -34,7 +42,7 @@ async function startBot() {
         printQRInTerminal: true,
         auth: state,
         logger: baileysLogger,
-        browser: ["WhatsApp Bot", "Chrome", "1.0.0"],
+        browser: [config.botName, "Chrome", config.botVersion],
         // Additional options to reduce verbosity
         transactionOpts: { maxCommitRetries: 1, delayBetweenTriesMs: 10 },
         getMessage: async () => undefined
@@ -45,8 +53,11 @@ async function startBot() {
         const { connection, lastDisconnect } = update;
         
         if (connection === 'close') {
-            const shouldReconnect = (lastDisconnect.error instanceof Boom && 
-                lastDisconnect.error.output.statusCode !== DisconnectReason.loggedOut);
+            const shouldReconnect = (
+                config.features.autoReconnect && 
+                lastDisconnect.error instanceof Boom && 
+                lastDisconnect.error.output.statusCode !== DisconnectReason.loggedOut
+            );
             
             // Log error to file but simplified message to terminal
             logger.error({ error: lastDisconnect.error }, 'Connection closed');
@@ -56,8 +67,8 @@ async function startBot() {
                 startBot();
             }
         } else if (connection === 'open') {
-            logger.terminal('✅ Bot is now connected and ready!');
-            logger.info('Bot is now connected!');
+            logger.terminal(`✅ ${config.botName} is now connected and ready!`);
+            logger.info(`${config.botName} is now connected!`);
         }
     });
     
@@ -76,7 +87,7 @@ async function startBot() {
 
 // Start the bot
 (async () => {
-    logger.terminal('🚀 Starting WhatsApp Bot...');
-    logger.info('Bot is starting...');
+    logger.terminal(`🚀 Starting ${config.botName}...`);
+    logger.info(`${config.botName} is starting...`);
     await startBot();
 })();

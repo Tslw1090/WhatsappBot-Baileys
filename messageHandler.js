@@ -3,24 +3,24 @@ const path = require('path');
 const logger = require('./logger');
 const { executeCommand } = require('./exec-command');
 const { evaluateCode } = require('./eval-command');
+const config = require('./config');
 
 // Load commands from commands folder
 const commands = new Map();
-const commandsDir = path.join(__dirname, 'commands');
 
 // Create commands directory if it doesn't exist
-if (!fs.existsSync(commandsDir)) {
-    fs.mkdirSync(commandsDir, { recursive: true });
+if (!fs.existsSync(config.commandsDir)) {
+    fs.mkdirSync(config.commandsDir, { recursive: true });
 }
 
 // Load all command modules
 const loadCommands = () => {
     commands.clear();
-    const commandFiles = fs.readdirSync(commandsDir).filter(file => file.endsWith('.js'));
+    const commandFiles = fs.readdirSync(config.commandsDir).filter(file => file.endsWith('.js'));
     
     for (const file of commandFiles) {
         try {
-            const command = require(path.join(commandsDir, file));
+            const command = require(path.join(config.commandsDir, file));
             if (command.name && command.execute) {
                 commands.set(command.name.toLowerCase(), command);
                 // Don't show this in terminal, only in log file
@@ -40,10 +40,10 @@ const loadCommands = () => {
 loadCommands();
 
 // Watch for changes in the commands directory
-fs.watch(commandsDir, (eventType, filename) => {
+fs.watch(config.commandsDir, (eventType, filename) => {
     if (filename && filename.endsWith('.js')) {
         // Clear require cache for this file
-        const filePath = path.join(commandsDir, filename);
+        const filePath = path.join(config.commandsDir, filename);
         if (require.cache[require.resolve(filePath)]) {
             delete require.cache[require.resolve(filePath)];
         }
@@ -113,23 +113,27 @@ async function messageHandler(sock, message) {
         }, 'Message received');
         
         // Process commands
-        if (messageContent.startsWith('!')) {
-            const [commandName, ...args] = messageContent.slice(1).split(' ');
+        if (messageContent.startsWith(config.prefix)) {
+            const [commandName, ...args] = messageContent.slice(config.prefix.length).split(' ');
             const command = commands.get(commandName.toLowerCase());
             
             // Only show executed commands in terminal
             if (command) {
-                logger.terminal(`🔹 ${senderNumber}: !${commandName}`);
+                logger.terminal(`🔹 ${senderNumber}: ${config.prefix}${commandName}`);
                 await command.execute(sock, message, args.join(' '), {
                     senderNumber,
                     messageContent,
-                    messageType
+                    messageType,
+                    config
                 });
-                logger.info(`Command ${commandName} executed by ${senderNumber}`);
+                
+                if (config.features.commandLogging) {
+                    logger.info(`Command ${commandName} executed by ${senderNumber}`);
+                }
             } else {
-                logger.terminal(`❓ ${senderNumber}: Unknown command !${commandName}`);
+                logger.terminal(`❓ ${senderNumber}: Unknown command ${config.prefix}${commandName}`);
                 await sock.sendMessage(senderNumber, { 
-                    text: `Unknown command: ${commandName}. Type !help to see available commands.` 
+                    text: config.messages.commandNotFound
                 });
                 logger.info(`Unknown command ${commandName} requested by ${senderNumber}`);
             }

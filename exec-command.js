@@ -2,6 +2,7 @@ const { promisify } = require('util');
 const cp = require('child_process');
 const exec = promisify(cp.exec).bind(cp);
 const logger = require('./logger');
+const config = require('./config');
 
 /**
  * Execute shell commands via WhatsApp
@@ -11,19 +12,21 @@ const logger = require('./logger');
  */
 async function executeCommand(sock, message, command) {
     const sender = message.key.remoteJid;
-    const ownerNumbers = process.env.OWNER_NUMBER?.split(',') || ['your-number@s.whatsapp.net']; // Configure your number
     
     // Security check - only allow owner to execute commands
-    if (!ownerNumbers.includes(message.key.participant || sender)) {
-        await sock.sendMessage(sender, { text: '⚠️ Only bot owner can use this command' }, { quoted: message });
+    if (!config.ownerNumbers.includes(message.key.participant || sender)) {
+        await sock.sendMessage(sender, { text: config.messages.ownerOnly }, { quoted: message });
         return;
     }
     
-    await sock.sendMessage(sender, { text: '⏳ Executing command...' }, { quoted: message });
+    await sock.sendMessage(sender, { text: config.messages.processingCommand }, { quoted: message });
     
     try {
         logger.info(`Executing command: ${command}`);
-        const { stdout, stderr } = await exec(command);
+        const { stdout, stderr } = await exec(command, { 
+            timeout: config.maxProcessingTime,
+            maxBuffer: 1024 * 1024 // 1MB buffer
+        });
         
         if (stdout) {
             await sock.sendMessage(sender, { text: `📋 Result:\n\n${stdout}` }, { quoted: message });

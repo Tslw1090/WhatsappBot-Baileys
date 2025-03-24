@@ -1,6 +1,7 @@
 const util = require('util');
 const syntaxError = require('syntax-error');
 const logger = require('./logger');
+const config = require('./config');
 
 /**
  * Evaluate JavaScript code via WhatsApp
@@ -11,11 +12,10 @@ const logger = require('./logger');
  */
 async function evaluateCode(sock, message, code, returnResult = false) {
     const sender = message.key.remoteJid;
-    const ownerNumbers = process.env.OWNER_NUMBER?.split(',') || ['your-number@s.whatsapp.net']; // Configure your number
     
     // Security check - only allow owner to execute code
-    if (!ownerNumbers.includes(message.key.participant || sender)) {
-        await sock.sendMessage(sender, { text: '⚠️ Only bot owner can use this command' }, { quoted: message });
+    if (!config.ownerNumbers.includes(message.key.participant || sender)) {
+        await sock.sendMessage(sender, { text: config.messages.ownerOnly }, { quoted: message });
         return;
     }
 
@@ -39,14 +39,14 @@ async function evaluateCode(sock, message, code, returnResult = false) {
         const AsyncFunction = (async () => {}).constructor;
         const evalFunc = new AsyncFunction(
             'sock', 'message', 'require', 'console', 
-            'process', 'util', 'Buffer', 'sender',
+            'process', 'util', 'Buffer', 'sender', 'config',
             _text
         );
         
         logger.info(`Evaluating code: ${_text.substring(0, 100)}${_text.length > 100 ? '...' : ''}`);
         result = await evalFunc(
             sock, message, require, console, 
-            process, util, Buffer, sender
+            process, util, Buffer, sender, config
         );
     } catch (error) {
         logger.error({ error }, 'Error evaluating code');
